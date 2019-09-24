@@ -1,0 +1,27 @@
+apiVersion: serving.knative.dev/v1alpha1
+kind: Service
+metadata:
+  name: {{ KSVC_NAME }}
+spec:
+  template:
+    metadata:
+      annotations:
+        qunhe.faas.com/method: "{{ HTTP_METHOD }}"
+        qunhe.faas.com/path: "{{ HTTP_PATH }}"
+        qunhe.faas.com/identify: "{{ KSVC_ID }}"
+        qunhe.faas.com/env: "{{ ENV }}"
+        qunhe.faas.com/author: "caiwei"
+    spec:
+      containers:
+      - image: {{ IMAGE }}
+        ports:
+          - name: http1
+            containerPort: 8080
+            protocol: TCP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 96Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi

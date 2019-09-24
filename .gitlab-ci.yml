@@ -1,0 +1,163 @@
+variables:
+  NODE_SELECTOR: -l 10.1.10.7 -l 10.1.11.18 -l 10.1.2.21 -l 10.1.2.22 -l 10.1.2.4 -l 10.1.2.5 -l 10.1.2.6 -l 10.1.2.9 -l 10.1.4.19 -l 10.1.4.7 -l 10.1.6.24 -l 10.1.6.25 -l 10.1.6.26 -l 10.1.6.4 -l 10.1.8.6
+  VA_NODE_SELECTOR: -l 10.111.211.159 -l 10.111.211.161 -l 10.111.211.162 -l 10.111.212.50 -l 10.111.212.59
+  HTTP_METHOD: get
+  HTTP_PATH: /faas/caiweiTest
+  GREY_PROXY_NAMESPACE: i18n-system
+  GREY_PROXY_CONTEXT: va
+  VA_PROXY_NAMESPACE: i18n-system
+  VA_PROXY_CONTEXT: va
+  SEA_PROXY_NAMESPACE: i18n-system
+  SEA_PROXY_CONTEXT: k8s-sg-admin
+  KSVC_ID: caiweiTest
+
+
+stages:
+  - push
+  - deploy
+  - deploy-us
+  - deploy-sg
+
+build-push-image:
+  stage: push
+  only:
+    refs:
+      - master
+    changes:
+      - package.json
+      - "*.js"
+      - .gitlab-ci.yml
+  image: registry.qunhequnhe.com/infra/tools/toolbox:1.0.0
+  tags:
+    - kube-runner
+  script:
+    - export IMAGE="registry.qunhequnhe.com/i18n/$KSVC_ID:"${CI_COMMIT_SHA:0:8}
+    - echo $IMAGE
+    - chmod 777 build.sh
+    - ./build.sh
+
+
+deploy-alpha:
+  stage: deploy
+  only:
+    refs:
+      - master
+    changes:
+      - package.json
+      - "*.js"
+      - .gitlab-ci.yml
+  image: registry.qunhequnhe.com/i18n/toolxbox:2.0.7
+  variables:
+    KSVC_NAME: $KSVC_ID
+    KSVC_NAMESPACE: i18n-alpha
+    KSVC_CONTEXT: kubernetes
+    ENV: alpha
+    PROXY_NAMESPACE: i18n-system
+    PROXY_CONTEXT: kubernetes
+  tags:
+    - kube-runner
+  script:
+    - export IMAGE="registry.qunhequnhe.com/i18n/$KSVC_ID:"${CI_COMMIT_SHA:0:8}
+    - echo $IMAGE
+    - render . ksvc.yml -d $KSVC_NAME -e IMAGE=$IMAGE -e HTTP_METHOD=$HTTP_METHOD -e HTTP_PATH=$HTTP_PATH -e KSVC_NAME=$KSVC_NAME -e KSVC_ID=$KSVC_ID -e ENV=$ENV
+    - kubectl apply -f ./render -n $KSVC_NAMESPACE --context $KSVC_CONTEXT
+    - ecm proxy-server-$ENV-config $PROXY_NAMESPACE $PROXY_CONTEXT -p $HTTP_METHOD,$HTTP_PATH=http://$KSVC_NAME.$KSVC_NAMESPACE.svc.cluster.local
+    - kubectl apply -f ./deploy -n $PROXY_NAMESPACE --context $PROXY_CONTEXT
+    - proxyupdate proxy-server-$ENV $PROXY_NAMESPACE $PROXY_CONTEXT
+    - kubectl apply -f ./proxy -n $PROXY_NAMESPACE --context $PROXY_CONTEXT
+    - deleteOldRevision $KSVC_NAME $KSVC_NAMESPACE $KSVC_CONTEXT
+
+deploy-sit:
+  stage: deploy
+  image: registry.qunhequnhe.com/i18n/toolxbox:2.0.7
+  only:
+    refs:
+      - master
+    changes:
+      - package.json
+      - "*.js"
+      - .gitlab-ci.yml
+  variables:
+    KSVC_NAME: $KSVC_ID
+    KSVC_NAMESPACE: i18n-sit
+    KSVC_CONTEXT: kubernetes
+    ENV: sit
+    PROXY_NAMESPACE: i18n-system
+    PROXY_CONTEXT: kubernetes
+  tags:
+    - kube-runner
+  script:
+    - export IMAGE="registry.qunhequnhe.com/i18n/$KSVC_ID:"${CI_COMMIT_SHA:0:8}
+    - echo $IMAGE
+    - render . ksvc.yml -d $KSVC_NAME -e IMAGE=$IMAGE -e HTTP_METHOD=$HTTP_METHOD -e HTTP_PATH=$HTTP_PATH -e KSVC_NAME=$KSVC_NAME -e KSVC_ID=$KSVC_ID -e ENV=$ENV
+    - kubectl apply -f ./render -n $KSVC_NAMESPACE --context $KSVC_CONTEXT
+    - ecm proxy-server-$ENV-config $PROXY_NAMESPACE $PROXY_CONTEXT -p $HTTP_METHOD,$HTTP_PATH=http://$KSVC_NAME.$KSVC_NAMESPACE.svc.cluster.local
+    - kubectl apply -f ./deploy -n $PROXY_NAMESPACE --context $PROXY_CONTEXT
+    - proxyupdate proxy-server-$ENV $PROXY_NAMESPACE $PROXY_CONTEXT
+    - kubectl apply -f ./proxy -n $PROXY_NAMESPACE --context $PROXY_CONTEXT
+    - deleteOldRevision $KSVC_NAME $KSVC_NAMESPACE $KSVC_CONTEXT
+
+deploy-prod-us:
+  stage: deploy-us
+  image: registry.qunhequnhe.com/i18n/toolxbox:2.0.7
+  allow_failure: false
+  only:
+    refs:
+      - master
+    changes:
+      - package.json
+      - "*.js"
+      - .gitlab-ci.yml
+  variables:
+    SIT_KSVC_NAME: $KSVC_ID
+    SIT_KSVC_NAMESPACE: i18n-sit
+    SIT_KSVC_CONTEXT: kubernetes
+    PROD_KSVC_NAMESPACE: i18n-faas
+    PROD_KSVC_CONTEXT: va
+    ENV: prod
+    MODE: prod-us
+    PROD_PROXY_RELEASE: va
+  tags:
+    - kube-runner
+  script:
+    - fop $SIT_KSVC_NAME $SIT_KSVC_NAMESPACE $SIT_KSVC_CONTEXT $MODE $ENV
+    - kubectl apply -f ./ksvc -n $PROD_KSVC_NAMESPACE --context $PROD_KSVC_CONTEXT
+    ## 部署生产环境
+    - ecm proxy-server-$PROD_PROXY_RELEASE-config $VA_PROXY_NAMESPACE $VA_PROXY_CONTEXT  -p $HTTP_METHOD,$HTTP_PATH=http://$KSVC_ID.$PROD_KSVC_NAMESPACE.svc.cluster.local
+    - kubectl apply -f ./deploy -n $VA_PROXY_NAMESPACE --context $VA_PROXY_CONTEXT
+    - proxyupdate proxy-server-$PROD_PROXY_RELEASE $VA_PROXY_NAMESPACE $VA_PROXY_CONTEXT
+    - kubectl apply -f ./proxy -n $VA_PROXY_NAMESPACE --context $VA_PROXY_CONTEXT
+    - deleteOldRevision $KSVC_ID $PROD_KSVC_NAMESPACE $PROD_KSVC_CONTEXT
+  when: manual
+
+
+
+deploy-prod-sg:
+  stage: deploy-sg
+  image: registry.qunhequnhe.com/i18n/toolxbox:2.0.7
+  only:
+    refs:
+      - master
+    changes:
+      - package.json
+      - "*.js"
+      - .gitlab-ci.yml
+  variables:
+    SOURCE_KSVC_NAME: $KSVC_ID
+    SOURCE_KSVC_NAMESPACE: i18n-faas
+    SOURCE_KSVC_CONTEXT: va
+    SEA_KSVC_NAMESPACE: i18n-faas
+    SEA_KSVC_CONTEXT: k8s-sg-admin
+    SEA_PROXY_RELEASE: sg
+    ENV: prod
+    MODE: sg
+  tags:
+    - kube-runner
+  script:
+    - fop $SOURCE_KSVC_NAME $SOURCE_KSVC_NAMESPACE $SOURCE_KSVC_CONTEXT $MODE $ENV
+    - kubectl apply -f ./ksvc -n $SEA_KSVC_NAMESPACE --context $SEA_KSVC_CONTEXT
+    - ecm proxy-server-$SEA_PROXY_RELEASE-config $SEA_PROXY_NAMESPACE $SEA_PROXY_CONTEXT  -p $HTTP_METHOD,$HTTP_PATH=http://$KSVC_ID.$SEA_KSVC_NAMESPACE.svc.cluster.local
+    - kubectl apply -f ./deploy -n $SEA_PROXY_NAMESPACE --context $SEA_PROXY_CONTEXT
+    - proxyupdate proxy-server-$SEA_PROXY_RELEASE $SEA_PROXY_NAMESPACE $SEA_PROXY_CONTEXT
+    - kubectl apply -f ./proxy -n $SEA_PROXY_NAMESPACE --context $SEA_PROXY_CONTEXT
+    - deleteOldRevision $SOURCE_KSVC_NAME $SEA_KSVC_NAMESPACE $SEA_KSVC_CONTEXT
